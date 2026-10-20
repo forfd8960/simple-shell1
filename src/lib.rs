@@ -4,3 +4,26 @@ pub mod errors;
 pub mod execute;
 
 pub type ShellResult<T> = Result<T, ShellErrors>;
+
+#[derive(Debug, PartialEq)]
+pub enum BuiltInCmd {
+    Cd,
+    Exit,
+    Pwd,
+    Export,
+    Echo,
+    Unknow,
+}
+
+impl From<&str> for BuiltInCmd {
+    fn from(value: &str) -> Self {
+        match value {
+            "cd" => Self::Cd,
+            "exit" => Self::Exit,
+            "export" => Self::Export,
+            "echo" => Self::Echo,
+            "pwd" => Self::Pwd,
+            _ => Self::Unknow,
+        }
+    }
+}

@@ -6,4 +6,10 @@ use thiserror::Error;
 pub enum ShellErrors {
     #[error("{0}")]
     IOError(#[from] io::Error),
+
+    #[error("{0}")]
+    InvalidArgs(String),
+
+    #[error("home path is not set")]
+    HomeNotSet,
 }
