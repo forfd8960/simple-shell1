@@ -1,5 +1,7 @@
 use std::io::{Write, stdin, stdout};
 
+use simple_shell::execute::run_command;
+
 fn main() -> anyhow::Result<()> {
     loop {
         print!("> ");
@@ -16,6 +18,8 @@ fn main() -> anyhow::Result<()> {
             break;
         }
         println!("{input}");
+
+        run_command(input)?;
     }
 
     Ok(())
