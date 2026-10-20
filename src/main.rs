@@ -17,6 +17,10 @@ fn main() -> anyhow::Result<()> {
         if input == "exit" {
             break;
         }
+        if input.is_empty() {
+            continue;
+        }
+
         println!("{input}");
 
         run_command(input)?;
