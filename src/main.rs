@@ -3,8 +3,13 @@ use std::io::{Write, stdin, stdout};
 use simple_shell::execute::run_command;
 
 fn main() -> anyhow::Result<()> {
+    println!("Welcome to Rush - A Rust Shell!");
+    println!("type exit to quit");
+
+    let mut cmd_count = 0;
     loop {
-        print!("> ");
+        let s = format!("rush[{cmd_count}]> ");
+        print!("{}", s);
 
         stdout().flush()?;
 
@@ -24,6 +29,7 @@ fn main() -> anyhow::Result<()> {
         println!("{input}");
 
         run_command(input)?;
+        cmd_count += 1;
     }
 
     Ok(())

@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.104"
+shlex = "2.0.1"
 thiserror = "2.0.21"

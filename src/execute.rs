@@ -3,12 +3,15 @@ use std::process::Command;
 use crate::{ShellResult, errors::ShellErrors};
 
 pub fn run_command(input: &str) -> ShellResult<()> {
-    let parts: Vec<&str> = input.split_whitespace().collect();
-    if parts.is_empty() {
+    let parts = parse_command(input);
+    if parts.is_none() {
         return Ok(());
     }
 
-    let cmd = parts[0];
+    let parts = parts.unwrap();
+    println!("command parts: {:?}", parts);
+
+    let cmd = &parts[0];
     let args = &parts[1..];
 
     let child = Command::new(cmd).args(args).spawn();
@@ -30,4 +33,27 @@ pub fn run_command(input: &str) -> ShellResult<()> {
     }
 
     Ok(())
+}
+
+pub fn parse_command(cmd: &str) -> Option<Vec<String>> {
+    shlex::split(cmd)
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn test_split_args() {
+        let inputs = [
+            r#"echo "hello world""#,
+            r#"echo 'file with spaces.txt'"#,
+            r#"echo hello\ world"#,
+        ];
+
+        for input in inputs {
+            match shlex::split(input) {
+                Some(args) => println!("{args:?}"),
+                None => eprintln!("Invalid input: unmatched quote or trailing escape"),
+            }
+        }
+    }
 }
