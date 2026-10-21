@@ -1,7 +1,8 @@
 use std::{
     env,
+    fs::{File, OpenOptions},
     path::Path,
-    process::{Command, exit},
+    process::{Command, Stdio, exit},
 };
 
 use crate::{BuiltInCmd, ShlResult, errors::ShellErrors};
@@ -55,9 +56,34 @@ impl ShlExecutor {
         }
 
         // execute external command
-        let child = Command::new(shl_cmd.name).args(shl_cmd.args).spawn();
+        let mut cmd = Command::new(shl_cmd.name);
+        cmd.args(shl_cmd.args);
 
-        match child {
+        for rd in shl_cmd.rds {
+            match rd.op {
+                RedirectOp::Ouput => {
+                    let file = File::create(rd.target)?;
+                    cmd.stdout(Stdio::from(file));
+                }
+                RedirectOp::Append => {
+                    let file = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(rd.target)?;
+                    cmd.stdout(Stdio::from(file));
+                }
+                RedirectOp::Input => {
+                    let file = File::create(rd.target)?;
+                    cmd.stdin(Stdio::from(file));
+                }
+                RedirectOp::ErrOutput => {
+                    let file = File::create(rd.target)?;
+                    cmd.stderr(Stdio::from(file));
+                }
+            }
+        }
+
+        match cmd.spawn() {
             Ok(mut child) => match child.wait() {
                 Ok(status) => {
                     println!("success run: {status}");
@@ -95,9 +121,6 @@ impl ShlExecutor {
                 self.cur_dir = p;
             }
             BuiltInCmd::Exit => exit(0),
-            BuiltInCmd::Echo => {
-                println!("{}", cmd.args.join(" "));
-            }
             BuiltInCmd::Export => {
                 let exp_args: Vec<&str> = cmd.args[0].split("=").collect();
                 if exp_args.len() != 2 {

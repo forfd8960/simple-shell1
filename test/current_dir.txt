@@ -1,0 +1,12 @@
+total 56
+drwxr-xr-x@ 11 alexz  staff   352 Oct 21 11:36 .
+drwxr-xr-x@ 64 alexz  staff  2048 Oct 20 09:54 ..
+drwxr-xr-x@ 12 alexz  staff   384 Oct 21 11:34 .git
+-rw-r--r--@  1 alexz  staff     8 Oct 20 09:54 .gitignore
+-rw-r--r--@  1 alexz  staff  1982 Oct 20 13:04 Cargo.lock
+-rw-r--r--@  1 alexz  staff   139 Oct 20 13:04 Cargo.toml
+-rw-r--r--@  1 alexz  staff     0 Oct 21 11:36 current_dir.txt
+-rw-r--r--@  1 alexz  staff  6213 Oct 21 11:24 readme_copy.md
+-rw-r--r--@  1 alexz  staff  6213 Oct 20 10:04 README.md
+drwxr-xr-x@  7 alexz  staff   224 Oct 21 10:17 screenshort
+drwxr-xr-x@  6 alexz  staff   192 Oct 20 10:39 src
