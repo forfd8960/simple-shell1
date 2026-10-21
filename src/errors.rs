@@ -12,4 +12,7 @@ pub enum ShellErrors {
 
     #[error("home path is not set")]
     HomeNotSet,
+
+    #[error("invalid command: {0}")]
+    InvalidCommand(String),
 }

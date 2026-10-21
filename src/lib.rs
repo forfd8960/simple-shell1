@@ -3,7 +3,7 @@ use crate::errors::ShellErrors;
 pub mod errors;
 pub mod execute;
 
-pub type ShellResult<T> = Result<T, ShellErrors>;
+pub type ShlResult<T> = Result<T, ShellErrors>;
 
 #[derive(Debug, PartialEq)]
 pub enum BuiltInCmd {

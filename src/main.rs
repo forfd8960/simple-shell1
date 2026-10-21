@@ -1,12 +1,29 @@
-use std::io::{Write, stdin, stdout};
+use std::{
+    env,
+    io::{Write, stdin, stdout},
+};
 
-use simple_shell::execute::run_command;
+use simple_shell::execute::ShlExecutor;
 
 fn main() -> anyhow::Result<()> {
     println!("Welcome to Rush - A Rust Shell!");
     println!("type exit to quit");
 
+    let cur_dir = match env::current_dir()?.into_string() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("failed to get current dir: {:?}", e);
+            return Ok(());
+        }
+    };
+
+    let home = env::var("HOME")
+        .ok()
+        .unwrap_or_else(|| "/Users/zzz".to_string());
+
+    let mut executor = ShlExecutor::new(cur_dir, home);
     let mut cmd_count = 0;
+
     loop {
         let s = format!("rush[{cmd_count}]> ");
         print!("{}", s);
@@ -28,7 +45,7 @@ fn main() -> anyhow::Result<()> {
 
         println!("{input}");
 
-        run_command(input)?;
+        executor.run_command(input)?;
         cmd_count += 1;
     }
 
