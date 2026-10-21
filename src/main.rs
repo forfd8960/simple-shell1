@@ -45,7 +45,7 @@ fn main() -> anyhow::Result<()> {
 
         println!("{input}");
 
-        executor.run_command(input)?;
+        executor.execute(input)?;
         cmd_count += 1;
     }
 

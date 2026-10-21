@@ -2,7 +2,7 @@ use std::{
     env,
     fs::{File, OpenOptions},
     path::Path,
-    process::{Command, Stdio, exit},
+    process::{Child, Command, Stdio, exit},
 };
 
 use crate::{BuiltInCmd, ShlResult, errors::ShellErrors};
@@ -21,6 +21,11 @@ pub enum RedirectOp {
     ErrOutput, // 2>
 }
 
+#[derive(Debug, Clone)]
+pub struct Pipeline {
+    pub commands: Vec<ShlCommand>,
+}
+
 #[derive(Debug, Default, Clone, PartialEq)]
 pub struct ShlCommand {
     pub name: String,
@@ -32,7 +37,7 @@ pub struct ShlCommand {
 pub struct ShlExecutor {
     pub cur_dir: String,
     pub home: String,
-    pub history: Vec<ShlCommand>,
+    pub history: Vec<Pipeline>,
 }
 
 impl ShlExecutor {
@@ -44,40 +49,86 @@ impl ShlExecutor {
         }
     }
 
-    pub fn run_command(&mut self, input: &str) -> ShlResult<()> {
-        let shl_cmd = parse_command(input)?;
-        println!("parsed shell command: {:?}", shl_cmd);
+    pub fn execute(&mut self, input: &str) -> ShlResult<()> {
+        let shl_pipe = parse_pipeline(input)?;
+        println!("parsed shell command: {:?}", shl_pipe);
 
-        self.history.push(shl_cmd.clone());
+        self.history.push(shl_pipe.clone());
 
-        let built_cmd = BuiltInCmd::from(shl_cmd.name.as_str());
-        if built_cmd != BuiltInCmd::Unknow {
-            return self.execute_builtin(&shl_cmd);
+        self.execute_pipeline(&shl_pipe)
+    }
+
+    fn execute_pipeline(&mut self, pipe: &Pipeline) -> ShlResult<()> {
+        let len = pipe.commands.len();
+        match len {
+            0 => return Ok(()),
+            1 => return self.run_cmd(&pipe.commands[0]),
+            _ => {
+                let mut children: Vec<Child> = Vec::new();
+                for (i, shl_cmd) in pipe.commands.iter().enumerate() {
+                    let mut cmd = Command::new(shl_cmd.name.clone());
+                    cmd.args(&shl_cmd.args);
+
+                    if i > 0 {
+                        if let Some(child) = children.last_mut() {
+                            let prev_stdout = child.stdout.take().ok_or_else(|| {
+                                ShellErrors::Pipe(format!("can not get pre stdout"))
+                            })?;
+
+                            cmd.stdin(prev_stdout);
+                        }
+                    } else {
+                        cmd.stdin(Stdio::inherit());
+                    }
+
+                    if i < len - 1 {
+                        cmd.stdout(Stdio::piped());
+                    } else {
+                        cmd.stdout(Stdio::inherit());
+                    }
+
+                    apply_redirections(shl_cmd, &mut cmd)?;
+
+                    let child = cmd.spawn()?;
+                    children.push(child);
+                }
+
+                for mut child in children {
+                    child.wait()?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn run_cmd(&mut self, shl_cmd: &ShlCommand) -> ShlResult<()> {
+        let builtin = BuiltInCmd::from(shl_cmd.name.as_str());
+        if builtin != BuiltInCmd::Unknow {
+            return self.execute_builtin(shl_cmd);
         }
 
-        // execute external command
-        let mut cmd = Command::new(shl_cmd.name);
-        cmd.args(shl_cmd.args);
+        let mut cmd = Command::new(shl_cmd.name.clone());
+        cmd.args(&shl_cmd.args);
 
-        for rd in shl_cmd.rds {
+        for rd in &shl_cmd.rds {
             match rd.op {
                 RedirectOp::Ouput => {
-                    let file = File::create(rd.target)?;
+                    let file = File::create(&rd.target)?;
                     cmd.stdout(Stdio::from(file));
                 }
                 RedirectOp::Append => {
                     let file = OpenOptions::new()
                         .create(true)
                         .append(true)
-                        .open(rd.target)?;
+                        .open(&rd.target)?;
                     cmd.stdout(Stdio::from(file));
                 }
                 RedirectOp::Input => {
-                    let file = File::create(rd.target)?;
+                    let file = File::open(&rd.target)?;
                     cmd.stdin(Stdio::from(file));
                 }
                 RedirectOp::ErrOutput => {
-                    let file = File::create(rd.target)?;
+                    let file = File::create(&rd.target)?;
                     cmd.stderr(Stdio::from(file));
                 }
             }
@@ -87,6 +138,7 @@ impl ShlExecutor {
             Ok(mut child) => match child.wait() {
                 Ok(status) => {
                     println!("success run: {status}");
+                    Ok(())
                 }
                 Err(e) => {
                     eprintln!("error when wait command: {e}");
@@ -98,8 +150,6 @@ impl ShlExecutor {
                 return Err(ShellErrors::IOError(e));
             }
         }
-
-        Ok(())
     }
 
     fn execute_builtin(&mut self, cmd: &ShlCommand) -> ShlResult<()> {
@@ -135,6 +185,15 @@ impl ShlExecutor {
         }
         Ok(())
     }
+}
+
+pub fn parse_pipeline(input: &str) -> ShlResult<Pipeline> {
+    let cmds: Vec<&str> = input.split("|").collect();
+    let mut pipe = Pipeline { commands: vec![] };
+    for cmd in cmds {
+        pipe.commands.push(parse_command(cmd)?);
+    }
+    Ok(pipe)
 }
 
 pub fn parse_command(cmd: &str) -> ShlResult<ShlCommand> {
@@ -206,6 +265,33 @@ pub fn parse_command(cmd: &str) -> ShlResult<ShlCommand> {
         }
         None => Err(ShellErrors::InvalidCommand(format!("no commands"))),
     }
+}
+
+fn apply_redirections(shl_cmd: &ShlCommand, cmd: &mut Command) -> ShlResult<()> {
+    for rd in &shl_cmd.rds {
+        match rd.op {
+            RedirectOp::Ouput => {
+                let file = File::create(&rd.target)?;
+                cmd.stdout(Stdio::from(file));
+            }
+            RedirectOp::Append => {
+                let file = OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&rd.target)?;
+                cmd.stdout(Stdio::from(file));
+            }
+            RedirectOp::Input => {
+                let file = File::open(&rd.target)?;
+                cmd.stdin(Stdio::from(file));
+            }
+            RedirectOp::ErrOutput => {
+                let file = File::create(&rd.target)?;
+                cmd.stderr(Stdio::from(file));
+            }
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

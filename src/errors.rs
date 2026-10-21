@@ -15,4 +15,7 @@ pub enum ShellErrors {
 
     #[error("invalid command: {0}")]
     InvalidCommand(String),
+
+    #[error("pipe error: {0}")]
+    Pipe(String),
 }
