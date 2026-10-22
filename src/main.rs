@@ -1,7 +1,7 @@
 use std::env;
 
 use rustyline::{DefaultEditor, error::ReadlineError};
-use simple_shell::execute::ShlExecutor;
+use simple_shell::{execute::ShlExecutor, job::JobManager};
 
 fn main() -> anyhow::Result<()> {
     println!("Welcome to Rush - A Rust Shell!");
@@ -22,10 +22,14 @@ fn main() -> anyhow::Result<()> {
         .ok()
         .unwrap_or_else(|| "/Users/zzz".to_string());
 
-    let mut executor = ShlExecutor::new(cur_dir, home);
+    let job_mgr = JobManager::new()?;
+    println!("initialized job manager");
+    let mut executor = ShlExecutor::new(cur_dir, home, job_mgr);
     let mut cmd_count = 0;
 
     loop {
+        executor.refresh_jobs()?;
+
         let s = format!("rush[{cmd_count}]> ");
         let line_res = rl.readline(&s);
 
@@ -46,6 +50,9 @@ fn main() -> anyhow::Result<()> {
                     Err(e) => eprintln!("{e}"),
                 }
                 cmd_count += 1;
+                if executor.need_exit {
+                    break;
+                }
             }
             Err(ReadlineError::Interrupted) => {
                 // Ctrl+C

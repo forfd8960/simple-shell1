@@ -2,10 +2,10 @@ use std::{
     env::{self},
     fs::{File, OpenOptions},
     path::Path,
-    process::{Child, Command, Stdio, exit},
+    process::{Child, Command, Stdio},
 };
 
-use crate::{BuiltInCmd, ShlResult, errors::ShellErrors};
+use crate::{BuiltInCmd, ShlResult, errors::ShellErrors, job::JobManager};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Redirection {
@@ -24,6 +24,7 @@ pub enum RedirectOp {
 #[derive(Debug, Clone)]
 pub struct Pipeline {
     pub commands: Vec<ShlCommand>,
+    pub background: bool,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -31,6 +32,7 @@ pub struct ShlCommand {
     pub name: String,
     pub args: Vec<String>,
     pub rds: Vec<Redirection>,
+    pub background: bool,
 }
 
 #[derive(Debug)]
@@ -38,15 +40,23 @@ pub struct ShlExecutor {
     pub cur_dir: String,
     pub home: String,
     pub history: Vec<Pipeline>,
+    pub job_manager: JobManager,
+    pub need_exit: bool,
 }
 
 impl ShlExecutor {
-    pub fn new(cur_dir: String, home: String) -> Self {
+    pub fn new(cur_dir: String, home: String, job_manager: JobManager) -> Self {
         Self {
             cur_dir,
             home,
             history: vec![],
+            job_manager,
+            need_exit: false,
         }
+    }
+
+    pub fn refresh_jobs(&mut self) -> ShlResult<()> {
+        self.job_manager.refresh()
     }
 
     pub fn execute(&mut self, input: &str) -> ShlResult<()> {
@@ -112,6 +122,14 @@ impl ShlExecutor {
 
         apply_redirections(shl_cmd, &mut cmd)?;
 
+        if shl_cmd.background {
+            let text = std::iter::once(shl_cmd.name.as_str())
+                .chain(shl_cmd.args.iter().map(String::as_str))
+                .collect::<Vec<_>>()
+                .join(" ");
+            return self.job_manager.launch(cmd, &text, true);
+        }
+
         match cmd.spawn() {
             Ok(mut child) => match child.wait() {
                 Ok(status) => {
@@ -132,6 +150,7 @@ impl ShlExecutor {
 
     fn execute_builtin(&mut self, cmd: &ShlCommand) -> ShlResult<()> {
         println!("executing builtin command");
+
         match BuiltInCmd::from(cmd.name.as_str()) {
             BuiltInCmd::Cd => {
                 if cmd.args.len() > 1 {
@@ -148,7 +167,7 @@ impl ShlExecutor {
                 env::set_current_dir(Path::new(&p))?;
                 self.cur_dir = p;
             }
-            BuiltInCmd::Exit => exit(0),
+            BuiltInCmd::Exit => self.need_exit = true,
             BuiltInCmd::Export => {
                 for arg in &cmd.args {
                     let exp_args: Vec<&str> = arg.split("=").collect();
@@ -166,6 +185,15 @@ impl ShlExecutor {
             BuiltInCmd::Pwd => {
                 println!("{}", self.cur_dir);
             }
+            BuiltInCmd::Jobs => self.job_manager.list()?,
+            BuiltInCmd::Fg => todo!(),
+            BuiltInCmd::Bg => {
+                let id = cmd.args[0].strip_prefix("%").unwrap();
+                let job_id = id
+                    .parse::<usize>()
+                    .map_err(|e| ShellErrors::InvalidArgs(format!("{e}")))?;
+                self.job_manager.background(job_id)?;
+            }
             BuiltInCmd::Unknow => {}
         }
         Ok(())
@@ -174,17 +202,24 @@ impl ShlExecutor {
 
 pub fn parse_pipeline(input: &str) -> ShlResult<Pipeline> {
     let cmds: Vec<&str> = input.split("|").collect();
-    let mut pipe = Pipeline { commands: vec![] };
+    let mut pipe = Pipeline {
+        commands: vec![],
+        background: false,
+    };
     for cmd in cmds {
-        let mut parsed_cmd = parse_command(cmd)?;
+        let (mut parsed_cmd, background) = parse_command(cmd)?;
         parsed_cmd.args = expand_command_args(parsed_cmd.args)?;
 
         pipe.commands.push(parsed_cmd);
+        pipe.background = background;
     }
+
     Ok(pipe)
 }
 
-pub fn parse_command(cmd: &str) -> ShlResult<ShlCommand> {
+pub fn parse_command(cmd: &str) -> ShlResult<(ShlCommand, bool)> {
+    let mut background = false;
+
     match shlex::split(cmd) {
         Some(parts) => {
             let mut shl_cmd = ShlCommand::default();
@@ -194,6 +229,11 @@ pub fn parse_command(cmd: &str) -> ShlResult<ShlCommand> {
             let mut i = 1;
             while i < len {
                 match parts[i].as_str() {
+                    "&" => {
+                        background = true;
+                        shl_cmd.background = true;
+                        i += 1;
+                    }
                     ">" => {
                         if i + 1 >= len {
                             return Err(ShellErrors::InvalidArgs(format!("file required after >")));
@@ -249,7 +289,7 @@ pub fn parse_command(cmd: &str) -> ShlResult<ShlCommand> {
                 }
             }
 
-            Ok(shl_cmd)
+            Ok((shl_cmd, background))
         }
         None => Err(ShellErrors::InvalidCommand(format!("no commands"))),
     }

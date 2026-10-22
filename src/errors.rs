@@ -21,4 +21,16 @@ pub enum ShellErrors {
 
     #[error("invalid var: {0}")]
     InvalidVar(String),
+
+    #[error("tty error: {0}")]
+    TTYError(String),
+
+    #[error("signal error: {0}")]
+    SigError(String),
+
+    #[error("nix error: {0}")]
+    NixError(#[from] nix::Error),
+
+    #[error("job error: {0}")]
+    JobError(String),
 }
