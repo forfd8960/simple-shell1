@@ -110,29 +110,7 @@ impl ShlExecutor {
         let mut cmd = Command::new(shl_cmd.name.clone());
         cmd.args(&shl_cmd.args);
 
-        for rd in &shl_cmd.rds {
-            match rd.op {
-                RedirectOp::Ouput => {
-                    let file = File::create(&rd.target)?;
-                    cmd.stdout(Stdio::from(file));
-                }
-                RedirectOp::Append => {
-                    let file = OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&rd.target)?;
-                    cmd.stdout(Stdio::from(file));
-                }
-                RedirectOp::Input => {
-                    let file = File::open(&rd.target)?;
-                    cmd.stdin(Stdio::from(file));
-                }
-                RedirectOp::ErrOutput => {
-                    let file = File::create(&rd.target)?;
-                    cmd.stderr(Stdio::from(file));
-                }
-            }
-        }
+        apply_redirections(shl_cmd, &mut cmd)?;
 
         match cmd.spawn() {
             Ok(mut child) => match child.wait() {
@@ -172,11 +150,18 @@ impl ShlExecutor {
             }
             BuiltInCmd::Exit => exit(0),
             BuiltInCmd::Export => {
-                let exp_args: Vec<&str> = cmd.args[0].split("=").collect();
-                if exp_args.len() != 2 {
-                    return Err(ShellErrors::InvalidArgs(format!("Echo need 2 args")));
+                for arg in &cmd.args {
+                    let exp_args: Vec<&str> = arg.split("=").collect();
+                    if exp_args.len() != 2 {
+                        return Err(ShellErrors::InvalidArgs(format!("invalid env var")));
+                    }
+                    unsafe { env::set_var(exp_args[0], exp_args[1]) }
                 }
-                unsafe { env::set_var(exp_args[0], exp_args[1]) }
+            }
+            BuiltInCmd::Unset => {
+                for arg in &cmd.args {
+                    unsafe { env::remove_var(arg) }
+                }
             }
             BuiltInCmd::Pwd => {
                 println!("{}", self.cur_dir);
@@ -344,6 +329,18 @@ mod tests {
             r#"ls /nonexistent 2> errors.txt"#,
             r#"sort < test.txt > sorted.txt"#,
         ];
+
+        for input in inputs {
+            match shlex::split(input) {
+                Some(args) => println!("{args:?}"),
+                None => eprintln!("Invalid input: unmatched quote or trailing escape"),
+            }
+        }
+    }
+
+    #[test]
+    fn test_split_export() {
+        let inputs = [r#"export RUST_LOG=debug RUST_BACKTRACE=1 PORT=3000"#];
 
         for input in inputs {
             match shlex::split(input) {

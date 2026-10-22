@@ -41,7 +41,10 @@ fn main() -> anyhow::Result<()> {
                     break;
                 }
 
-                executor.execute(line)?;
+                match executor.execute(line) {
+                    Ok(_) => {}
+                    Err(e) => eprintln!("{e}"),
+                }
                 cmd_count += 1;
             }
             Err(ReadlineError::Interrupted) => {

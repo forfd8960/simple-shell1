@@ -11,6 +11,7 @@ pub enum BuiltInCmd {
     Exit,
     Pwd,
     Export,
+    Unset,
     Unknow,
 }
 
@@ -20,6 +21,7 @@ impl From<&str> for BuiltInCmd {
             "cd" => Self::Cd,
             "exit" => Self::Exit,
             "export" => Self::Export,
+            "unset" => Self::Unset,
             "pwd" => Self::Pwd,
             _ => Self::Unknow,
         }
