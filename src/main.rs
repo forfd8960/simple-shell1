@@ -1,13 +1,14 @@
-use std::{
-    env,
-    io::{Write, stdin, stdout},
-};
+use std::env;
 
+use rustyline::{DefaultEditor, error::ReadlineError};
 use simple_shell::execute::ShlExecutor;
 
 fn main() -> anyhow::Result<()> {
     println!("Welcome to Rush - A Rust Shell!");
     println!("type exit to quit");
+
+    let mut rl = DefaultEditor::new()?;
+    let _ = rl.load_history(".rush_history");
 
     let cur_dir = match env::current_dir()?.into_string() {
         Ok(p) => p,
@@ -26,27 +27,38 @@ fn main() -> anyhow::Result<()> {
 
     loop {
         let s = format!("rush[{cmd_count}]> ");
-        print!("{}", s);
+        let line_res = rl.readline(&s);
 
-        stdout().flush()?;
+        match line_res {
+            Ok(line) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
 
-        let mut input = String::new();
+                rl.add_history_entry(line)?;
+                if line == "exit" {
+                    break;
+                }
 
-        let stdin = stdin();
-        stdin.read_line(&mut input)?;
-
-        let input = input.trim();
-        if input == "exit" {
-            break;
+                executor.execute(line)?;
+                cmd_count += 1;
+            }
+            Err(ReadlineError::Interrupted) => {
+                // Ctrl+C
+                println!("^C");
+                continue;
+            }
+            Err(ReadlineError::Eof) => {
+                // Ctrl+D
+                println!("exit");
+                break;
+            }
+            Err(err) => {
+                eprintln!("read line: {:?}", err);
+                break;
+            }
         }
-        if input.is_empty() {
-            continue;
-        }
-
-        println!("{input}");
-
-        executor.execute(input)?;
-        cmd_count += 1;
     }
 
     Ok(())

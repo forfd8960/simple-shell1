@@ -1,5 +1,5 @@
 use std::{
-    env,
+    env::{self},
     fs::{File, OpenOptions},
     path::Path,
     process::{Child, Command, Stdio, exit},
@@ -191,7 +191,10 @@ pub fn parse_pipeline(input: &str) -> ShlResult<Pipeline> {
     let cmds: Vec<&str> = input.split("|").collect();
     let mut pipe = Pipeline { commands: vec![] };
     for cmd in cmds {
-        pipe.commands.push(parse_command(cmd)?);
+        let mut parsed_cmd = parse_command(cmd)?;
+        parsed_cmd.args = expand_command_args(parsed_cmd.args)?;
+
+        pipe.commands.push(parsed_cmd);
     }
     Ok(pipe)
 }
@@ -292,6 +295,26 @@ fn apply_redirections(shl_cmd: &ShlCommand, cmd: &mut Command) -> ShlResult<()> 
         }
     }
     Ok(())
+}
+
+fn expand_var(s: &str) -> ShlResult<String> {
+    let var_name = s.strip_prefix("$").unwrap();
+    let value = env::var(var_name).map_err(|e| ShellErrors::InvalidVar(format!("{e}")))?;
+
+    Ok(value)
+}
+
+fn expand_command_args(args: Vec<String>) -> ShlResult<Vec<String>> {
+    let mut expand_args = Vec::new();
+    for arg in args {
+        if arg.starts_with("$") {
+            let expand_arg = expand_var(arg.as_str())?;
+            expand_args.push(expand_arg);
+        } else {
+            expand_args.push(arg.clone());
+        }
+    }
+    Ok(expand_args)
 }
 
 #[cfg(test)]

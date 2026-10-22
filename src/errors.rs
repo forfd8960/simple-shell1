@@ -18,4 +18,7 @@ pub enum ShellErrors {
 
     #[error("pipe error: {0}")]
     Pipe(String),
+
+    #[error("invalid var: {0}")]
+    InvalidVar(String),
 }
