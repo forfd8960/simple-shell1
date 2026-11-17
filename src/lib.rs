@@ -2,7 +2,7 @@ use crate::errors::ShellErrors;
 
 pub mod errors;
 pub mod execute;
-pub mod job;
+pub mod lexer;
 
 pub type ShlResult<T> = Result<T, ShellErrors>;
 
@@ -13,24 +13,17 @@ pub enum BuiltInCmd {
     Pwd,
     Export,
     Unset,
-    Jobs,
-    Fg,
-    Bg,
-    Unknow,
 }
 
-impl From<&str> for BuiltInCmd {
-    fn from(value: &str) -> Self {
+impl BuiltInCmd {
+    pub fn from_str(value: &str) -> Option<Self> {
         match value {
-            "cd" => Self::Cd,
-            "exit" => Self::Exit,
-            "export" => Self::Export,
-            "unset" => Self::Unset,
-            "jobs" => Self::Jobs,
-            "fg" => Self::Fg,
-            "bg" => Self::Bg,
-            "pwd" => Self::Pwd,
-            _ => Self::Unknow,
+            "cd" => Some(Self::Cd),
+            "exit" => Some(Self::Exit),
+            "export" => Some(Self::Export),
+            "unset" => Some(Self::Unset),
+            "pwd" => Some(Self::Pwd),
+            _ => None,
         }
     }
 }

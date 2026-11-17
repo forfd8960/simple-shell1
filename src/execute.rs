@@ -1,11 +1,16 @@
 use std::{
     env::{self},
     fs::{File, OpenOptions},
+    mem,
     path::Path,
     process::{Child, Command, Stdio},
 };
 
-use crate::{BuiltInCmd, ShlResult, errors::ShellErrors, job::JobManager};
+use crate::{
+    BuiltInCmd, ShlResult,
+    errors::ShellErrors,
+    lexer::{self, Token},
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Redirection {
@@ -24,7 +29,6 @@ pub enum RedirectOp {
 #[derive(Debug, Clone)]
 pub struct Pipeline {
     pub commands: Vec<ShlCommand>,
-    pub background: bool,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -32,39 +36,27 @@ pub struct ShlCommand {
     pub name: String,
     pub args: Vec<String>,
     pub rds: Vec<Redirection>,
-    pub background: bool,
 }
 
 #[derive(Debug)]
 pub struct ShlExecutor {
     pub cur_dir: String,
     pub home: String,
-    pub history: Vec<Pipeline>,
-    pub job_manager: JobManager,
     pub need_exit: bool,
 }
 
 impl ShlExecutor {
-    pub fn new(cur_dir: String, home: String, job_manager: JobManager) -> Self {
+    pub fn new(cur_dir: String, home: String) -> Self {
         Self {
             cur_dir,
             home,
-            history: vec![],
-            job_manager,
             need_exit: false,
         }
-    }
-
-    pub fn refresh_jobs(&mut self) -> ShlResult<()> {
-        self.job_manager.refresh()
     }
 
     pub fn execute(&mut self, input: &str) -> ShlResult<()> {
         let shl_pipe = parse_pipeline(input)?;
         println!("parsed shell command: {:?}", shl_pipe);
-
-        self.history.push(shl_pipe.clone());
-
         self.execute_pipeline(&shl_pipe)
     }
 
@@ -112,23 +104,14 @@ impl ShlExecutor {
     }
 
     fn run_cmd(&mut self, shl_cmd: &ShlCommand) -> ShlResult<()> {
-        let builtin = BuiltInCmd::from(shl_cmd.name.as_str());
-        if builtin != BuiltInCmd::Unknow {
-            return self.execute_builtin(shl_cmd);
+        if let Some(built_in) = BuiltInCmd::from_str(shl_cmd.name.as_str()) {
+            return self.execute_builtin(built_in, shl_cmd);
         }
 
         let mut cmd = Command::new(shl_cmd.name.clone());
         cmd.args(&shl_cmd.args);
 
         apply_redirections(shl_cmd, &mut cmd)?;
-
-        if shl_cmd.background {
-            let text = std::iter::once(shl_cmd.name.as_str())
-                .chain(shl_cmd.args.iter().map(String::as_str))
-                .collect::<Vec<_>>()
-                .join(" ");
-            return self.job_manager.launch(cmd, &text, true);
-        }
 
         match cmd.spawn() {
             Ok(mut child) => match child.wait() {
@@ -148,10 +131,10 @@ impl ShlExecutor {
         }
     }
 
-    fn execute_builtin(&mut self, cmd: &ShlCommand) -> ShlResult<()> {
+    fn execute_builtin(&mut self, built_in: BuiltInCmd, cmd: &ShlCommand) -> ShlResult<()> {
         println!("executing builtin command");
 
-        match BuiltInCmd::from(cmd.name.as_str()) {
+        match built_in {
             BuiltInCmd::Cd => {
                 if cmd.args.len() > 1 {
                     return Err(ShellErrors::InvalidArgs(format!("cd only takes 1 arg")));
@@ -185,114 +168,102 @@ impl ShlExecutor {
             BuiltInCmd::Pwd => {
                 println!("{}", self.cur_dir);
             }
-            BuiltInCmd::Jobs => self.job_manager.list()?,
-            BuiltInCmd::Fg => todo!(),
-            BuiltInCmd::Bg => {
-                let id = cmd.args[0].strip_prefix("%").unwrap();
-                let job_id = id
-                    .parse::<usize>()
-                    .map_err(|e| ShellErrors::InvalidArgs(format!("{e}")))?;
-                self.job_manager.background(job_id)?;
-            }
-            BuiltInCmd::Unknow => {}
         }
         Ok(())
     }
 }
 
 pub fn parse_pipeline(input: &str) -> ShlResult<Pipeline> {
-    let cmds: Vec<&str> = input.split("|").collect();
-    let mut pipe = Pipeline {
-        commands: vec![],
-        background: false,
-    };
-    for cmd in cmds {
-        let (mut parsed_cmd, background) = parse_command(cmd)?;
-        parsed_cmd.args = expand_command_args(parsed_cmd.args)?;
+    let tokens = lexer::tokenize(input)?;
+    let mut commands: Vec<ShlCommand> = Vec::new();
+    let mut current: Vec<Token> = Vec::new();
 
-        pipe.commands.push(parsed_cmd);
-        pipe.background = background;
-    }
+    for token in tokens {
+        if token.is_operator("&") {
+            return Err(ShellErrors::InvalidCommand(format!(
+                "background execution is not supported"
+            )));
+        }
 
-    Ok(pipe)
-}
-
-pub fn parse_command(cmd: &str) -> ShlResult<(ShlCommand, bool)> {
-    let mut background = false;
-
-    match shlex::split(cmd) {
-        Some(parts) => {
-            let mut shl_cmd = ShlCommand::default();
-            let len = parts.len();
-
-            shl_cmd.name = parts[0].clone();
-            let mut i = 1;
-            while i < len {
-                match parts[i].as_str() {
-                    "&" => {
-                        background = true;
-                        shl_cmd.background = true;
-                        i += 1;
-                    }
-                    ">" => {
-                        if i + 1 >= len {
-                            return Err(ShellErrors::InvalidArgs(format!("file required after >")));
-                        }
-
-                        shl_cmd.rds.push(Redirection {
-                            op: RedirectOp::Ouput,
-                            target: parts[i + 1].clone(),
-                        });
-                        i += 2;
-                    }
-                    "<" => {
-                        if i + 1 >= len {
-                            return Err(ShellErrors::InvalidArgs(format!("file required after <")));
-                        }
-
-                        shl_cmd.rds.push(Redirection {
-                            op: RedirectOp::Input,
-                            target: parts[i + 1].clone(),
-                        });
-                        i += 2;
-                    }
-                    ">>" => {
-                        if i + 1 >= len {
-                            return Err(ShellErrors::InvalidArgs(format!(
-                                "file required after >>"
-                            )));
-                        }
-
-                        shl_cmd.rds.push(Redirection {
-                            op: RedirectOp::Append,
-                            target: parts[i + 1].clone(),
-                        });
-                        i += 2;
-                    }
-                    "2>" => {
-                        if i + 1 >= len {
-                            return Err(ShellErrors::InvalidArgs(format!(
-                                "file required after 2>"
-                            )));
-                        }
-
-                        shl_cmd.rds.push(Redirection {
-                            op: RedirectOp::ErrOutput,
-                            target: parts[i + 1].clone(),
-                        });
-                        i += 2;
-                    }
-                    _ => {
-                        shl_cmd.args.push(parts[i].clone());
-                        i += 1;
-                    }
-                }
+        if token.is_operator("|") {
+            if current.is_empty() {
+                return Err(ShellErrors::InvalidCommand(format!(
+                    "empty command in pipeline"
+                )));
             }
 
-            Ok((shl_cmd, background))
+            commands.push(parse_command(mem::take(&mut current))?);
+            continue;
         }
-        None => Err(ShellErrors::InvalidCommand(format!("no commands"))),
+
+        current.push(token);
     }
+
+    if !current.is_empty() {
+        commands.push(parse_command(current)?);
+    }
+
+    for cmd in commands.iter_mut() {
+        cmd.args = expand_command_args(mem::take(&mut cmd.args))?;
+    }
+
+    Ok(Pipeline { commands })
+}
+
+pub fn parse_command(seg: Vec<Token>) -> ShlResult<ShlCommand> {
+    let mut shl_cmd = ShlCommand::default();
+    let len = seg.len();
+
+    shl_cmd.name = seg[0].text.clone();
+    let mut i = 1;
+    while i < len {
+        if seg[i].is_operator(">") {
+            if i + 1 >= len {
+                return Err(ShellErrors::InvalidArgs(format!("file required after >")));
+            }
+
+            shl_cmd.rds.push(Redirection {
+                op: RedirectOp::Ouput,
+                target: seg[i + 1].text.clone(),
+            });
+            i += 2;
+        } else if seg[i].is_operator("<") {
+            if i + 1 >= len {
+                return Err(ShellErrors::InvalidArgs(format!("file required after <")));
+            }
+
+            shl_cmd.rds.push(Redirection {
+                op: RedirectOp::Input,
+                target: seg[i + 1].text.clone(),
+            });
+            i += 2;
+        } else if seg[i].is_operator(">>") {
+            if i + 1 >= len {
+                return Err(ShellErrors::InvalidArgs(format!("file required after >>")));
+            }
+
+            shl_cmd.rds.push(Redirection {
+                op: RedirectOp::Append,
+                target: seg[i + 1].text.clone(),
+            });
+            i += 2;
+        } else if seg[i].is_operator("2>") {
+            if i + 1 >= len {
+                return Err(ShellErrors::InvalidArgs(format!("file required after 2>")));
+            }
+
+            shl_cmd.rds.push(Redirection {
+                op: RedirectOp::ErrOutput,
+                target: seg[i + 1].text.clone(),
+            });
+            i += 2;
+        } else {
+            shl_cmd.args.push(seg[i].text.clone());
+            i += 1;
+        }
+    }
+
+    Ok(shl_cmd)
 }
 
 fn apply_redirections(shl_cmd: &ShlCommand, cmd: &mut Command) -> ShlResult<()> {
