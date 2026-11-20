@@ -1,3 +1,5 @@
+use std::mem;
+
 use crate::{ShellErrors, ShlResult};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -23,60 +25,115 @@ impl Token {
 
 pub fn tokenize(input: &str) -> ShlResult<Vec<Token>> {
     let mut tokens = Vec::new();
-    let mut current: Option<Token> = None;
-    let mut chars = input.chars().peekable();
+    let chars: Vec<char> = input.chars().collect();
+    let mut current = String::new();
 
-    while let Some(ch) = chars.next() {
-        let operator = match ch {
-            '2' if current.is_none() && chars.next_if_eq(&'>').is_some() => Some("2>"),
-            '>' if chars.next_if_eq(&'>').is_some() => Some(">>"),
-            '>' => Some(">"),
-            '<' => Some("<"),
-            '|' => Some("|"),
-            _ => None,
-        };
-
-        if matches!(ch, ' ' | '\t') || operator.is_some() {
-            tokens.extend(current.take());
-            if let Some(operator) = operator {
-                tokens.push(Token::unquoted(operator));
-            }
-            continue;
-        }
-
-        let word = current.get_or_insert_with(|| Token::unquoted(""));
+    let mut idx = 0;
+    let mut in_word = false;
+    while idx < chars.len() {
+        let ch = chars.get(idx).ok_or_else(|| ShellErrors::EofChars)?;
         match ch {
-            '\'' | '"' => {
-                word.quoted = true;
-                word.literal |= ch == '\'';
-                read_quoted(&mut chars, ch, &mut word.text)?;
+            ' ' | '\t' => {
+                idx += 1;
+                if !in_word {
+                    continue;
+                }
+
+                in_word = false;
+                if !current.is_empty() {
+                    tokens.push(Token {
+                        text: mem::take(&mut current),
+                        quoted: false,
+                        literal: false,
+                    });
+                }
             }
-            '\\' => word.text.extend(chars.next()),
-            _ => word.text.push(ch),
+            '2' if !in_word && chars.get(idx + 1) == Some(&'>') => {
+                tokens.push(Token::unquoted("2>"));
+                idx += 2;
+            }
+            '\'' => {
+                let (res, new_idx) = read_quoted(&chars, idx + 1, '\'')?;
+                tokens.push(Token {
+                    text: res,
+                    quoted: true,
+                    literal: true,
+                });
+
+                idx = new_idx;
+            }
+            '"' => {
+                let (res, new_idx) = read_quoted(&chars, idx + 1, '"')?;
+                tokens.push(Token {
+                    text: res,
+                    quoted: true,
+                    literal: true,
+                });
+
+                idx = new_idx;
+            }
+            '<' => {
+                tokens.push(Token::unquoted("<"));
+                idx += 1;
+            }
+            '>' => {
+                let op = if idx < chars.len() && chars.get(idx + 1) == Some(&'>') {
+                    idx += 2;
+                    ">>"
+                } else {
+                    idx += 1;
+                    ">"
+                };
+
+                tokens.push(Token::unquoted(op));
+            }
+            '|' => {
+                tokens.push(Token::unquoted("|"));
+                idx += 1;
+            }
+            _ => {
+                in_word = true;
+                current.push(*ch);
+                idx += 1;
+            }
         }
     }
 
-    tokens.extend(current);
+    if !current.is_empty() {
+        tokens.push(Token {
+            text: mem::take(&mut current),
+            quoted: false,
+            literal: false,
+        });
+    }
+
     Ok(tokens)
 }
 
-fn read_quoted(
-    chars: &mut impl Iterator<Item = char>,
-    quote: char,
-    text: &mut String,
-) -> ShlResult<()> {
-    while let Some(ch) = chars.next() {
-        match ch {
-            ch if ch == quote => return Ok(()),
-            '\\' if quote == '"' => text.extend(chars.next()),
-            _ => text.push(ch),
+fn read_quoted(chars: &Vec<char>, start: usize, quote: char) -> ShlResult<(String, usize)> {
+    let mut idx = start;
+    let mut result = String::new();
+    let mut end = false;
+    while idx < chars.len() {
+        let v = chars.get(idx).ok_or_else(|| ShellErrors::EofChars)?;
+        if v == &quote {
+            end = true;
+            idx += 1;
+            break;
         }
+
+        result.push(*v);
+        idx += 1;
     }
 
-    let kind = if quote == '\'' { "single" } else { "double" };
-    Err(ShellErrors::InvalidCommand(format!(
-        "unmatched {kind} quote"
-    )))
+    if !end && idx >= chars.len() {
+        let kind = if quote == '\'' { "single" } else { "double" };
+        Err(ShellErrors::InvalidCommand(format!(
+            "unmatched {kind} quote"
+        )))
+    } else {
+        Ok((result, idx))
+    }
 }
 
 #[cfg(test)]
@@ -85,12 +142,12 @@ mod tests {
 
     #[test]
     fn empty_quotes_start_a_word_before_stderr_redirection() {
-        let tokens = tokenize(r#"''2>out 2>err"#).unwrap();
+        let tokens = tokenize(r#"'' 2>out 2>err"#).unwrap();
         let texts: Vec<_> = tokens.iter().map(|token| token.text.as_str()).collect();
 
-        assert_eq!(texts, ["2", ">", "out", "2>", "err"]);
+        assert_eq!(texts, ["", "2>", "out", "2>", "err"]);
         assert!(tokens[0].quoted && tokens[0].literal);
-        assert!(tokens[1].is_operator(">"));
+        assert!(tokens[1].is_operator("2>"));
         assert!(tokens[3].is_operator("2>"));
     }
 

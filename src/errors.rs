@@ -7,6 +7,9 @@ pub enum ShellErrors {
     #[error("{0}")]
     IOError(#[from] io::Error),
 
+    #[error("end of chars")]
+    EofChars,
+
     #[error("{0}")]
     InvalidArgs(String),
 
