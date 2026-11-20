@@ -1,7 +1,4 @@
-use std::mem;
-
-use crate::ShellErrors;
-use crate::ShlResult;
+use crate::{ShellErrors, ShlResult};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Token {
@@ -11,6 +8,14 @@ pub struct Token {
 }
 
 impl Token {
+    fn unquoted(text: &str) -> Self {
+        Self {
+            text: text.to_string(),
+            quoted: false,
+            literal: false,
+        }
+    }
+
     pub fn is_operator(&self, op: &str) -> bool {
         !self.quoted && self.text == op
     }
@@ -18,166 +23,76 @@ impl Token {
 
 pub fn tokenize(input: &str) -> ShlResult<Vec<Token>> {
     let mut tokens = Vec::new();
-    let mut current = String::new();
-    let mut quoted = false;
-    let mut literal = false;
-    let mut started = false;
-
+    let mut current: Option<Token> = None;
     let mut chars = input.chars().peekable();
+
     while let Some(ch) = chars.next() {
+        let operator = match ch {
+            '2' if current.is_none() && chars.next_if_eq(&'>').is_some() => Some("2>"),
+            '>' if chars.next_if_eq(&'>').is_some() => Some(">>"),
+            '>' => Some(">"),
+            '<' => Some("<"),
+            '|' => Some("|"),
+            _ => None,
+        };
+
+        if matches!(ch, ' ' | '\t') || operator.is_some() {
+            tokens.extend(current.take());
+            if let Some(operator) = operator {
+                tokens.push(Token::unquoted(operator));
+            }
+            continue;
+        }
+
+        let word = current.get_or_insert_with(|| Token::unquoted(""));
         match ch {
-            ' ' | '\t' => {
-                flush(
-                    &mut tokens,
-                    &mut current,
-                    &mut quoted,
-                    &mut literal,
-                    &mut started,
-                );
+            '\'' | '"' => {
+                word.quoted = true;
+                word.literal |= ch == '\'';
+                read_quoted(&mut chars, ch, &mut word.text)?;
             }
-            '\'' => {
-                quoted = true;
-                literal = true;
-                started = true;
-                let mut closed = false;
-                while let Some(c) = chars.next() {
-                    if c == '\'' {
-                        closed = true;
-                        break;
-                    }
-                    current.push(c);
-                }
-                if !closed {
-                    return Err(ShellErrors::InvalidCommand(format!(
-                        "unmatched single quote"
-                    )));
-                }
-            }
-            '"' => {
-                quoted = true;
-                started = true;
-                let mut closed = false;
-                while let Some(c) = chars.next() {
-                    if c == '"' {
-                        closed = true;
-                        break;
-                    }
-                    if c == '\\' {
-                        if let Some(n) = chars.next() {
-                            current.push(n);
-                            continue;
-                        }
-                    }
-                    current.push(c);
-                }
-                if !closed {
-                    return Err(ShellErrors::InvalidCommand(format!(
-                        "unmatched double quote"
-                    )));
-                }
-            }
-            '\\' => {
-                started = true;
-                if let Some(n) = chars.next() {
-                    current.push(n);
-                }
-            }
-            '2' if !started && chars.peek() == Some(&'>') => {
-                chars.next();
-                flush(
-                    &mut tokens,
-                    &mut current,
-                    &mut quoted,
-                    &mut literal,
-                    &mut started,
-                );
-                tokens.push(operator("2>"));
-            }
-            '<' => {
-                flush(
-                    &mut tokens,
-                    &mut current,
-                    &mut quoted,
-                    &mut literal,
-                    &mut started,
-                );
-                tokens.push(operator("<"));
-            }
-            '>' => {
-                let text = if chars.peek() == Some(&'>') {
-                    chars.next();
-                    ">>"
-                } else {
-                    ">"
-                };
-                flush(
-                    &mut tokens,
-                    &mut current,
-                    &mut quoted,
-                    &mut literal,
-                    &mut started,
-                );
-                tokens.push(operator(text));
-            }
-            '|' => {
-                flush(
-                    &mut tokens,
-                    &mut current,
-                    &mut quoted,
-                    &mut literal,
-                    &mut started,
-                );
-                tokens.push(operator("|"));
-            }
-            _ => {
-                started = true;
-                current.push(ch);
-            }
+            '\\' => word.text.extend(chars.next()),
+            _ => word.text.push(ch),
         }
     }
 
-    if started {
-        tokens.push(Token {
-            text: current,
-            quoted,
-            literal,
-        });
-    }
+    tokens.extend(current);
     Ok(tokens)
 }
 
-fn operator(text: &str) -> Token {
-    Token {
-        text: text.to_string(),
-        quoted: false,
-        literal: false,
-    }
-}
-
-fn flush(
-    tokens: &mut Vec<Token>,
-    current: &mut String,
-    quoted: &mut bool,
-    literal: &mut bool,
-    started: &mut bool,
-) {
-    if !*started {
-        return;
+fn read_quoted(
+    chars: &mut impl Iterator<Item = char>,
+    quote: char,
+    text: &mut String,
+) -> ShlResult<()> {
+    while let Some(ch) = chars.next() {
+        match ch {
+            ch if ch == quote => return Ok(()),
+            '\\' if quote == '"' => text.extend(chars.next()),
+            _ => text.push(ch),
+        }
     }
 
-    tokens.push(Token {
-        text: mem::take(current),
-        quoted: *quoted,
-        literal: *literal,
-    });
-    *quoted = false;
-    *literal = false;
-    *started = false;
+    let kind = if quote == '\'' { "single" } else { "double" };
+    Err(ShellErrors::InvalidCommand(format!(
+        "unmatched {kind} quote"
+    )))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::lexer::{Token, tokenize};
+
+    #[test]
+    fn empty_quotes_start_a_word_before_stderr_redirection() {
+        let tokens = tokenize(r#"''2>out 2>err"#).unwrap();
+        let texts: Vec<_> = tokens.iter().map(|token| token.text.as_str()).collect();
+
+        assert_eq!(texts, ["2", ">", "out", "2>", "err"]);
+        assert!(tokens[0].quoted && tokens[0].literal);
+        assert!(tokens[1].is_operator(">"));
+        assert!(tokens[3].is_operator("2>"));
+    }
 
     #[test]
     fn parse_simple_cmd() {

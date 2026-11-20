@@ -8,7 +8,7 @@ fn main() -> anyhow::Result<()> {
     println!("type exit to quit");
 
     let mut rl = DefaultEditor::new()?;
-    let _ = rl.load_history(".rush_history");
+    let _ = rl.load_history(".rush_history")?;
 
     let cur_dir = match env::current_dir()?.into_string() {
         Ok(p) => p,
@@ -45,6 +45,7 @@ fn main() -> anyhow::Result<()> {
                     Ok(_) => {}
                     Err(e) => eprintln!("{e}"),
                 }
+
                 cmd_count += 1;
                 if executor.need_exit {
                     break;

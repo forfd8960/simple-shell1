@@ -65,42 +65,47 @@ impl ShlExecutor {
         match len {
             0 => return Ok(()),
             1 => return self.run_cmd(&pipe.commands[0]),
-            _ => {
-                let mut children: Vec<Child> = Vec::new();
-                for (i, shl_cmd) in pipe.commands.iter().enumerate() {
-                    let mut cmd = Command::new(shl_cmd.name.clone());
-                    cmd.args(&shl_cmd.args);
-
-                    if i > 0 {
-                        if let Some(child) = children.last_mut() {
-                            let prev_stdout = child.stdout.take().ok_or_else(|| {
-                                ShellErrors::Pipe(format!("can not get pre stdout"))
-                            })?;
-
-                            cmd.stdin(prev_stdout);
-                        }
-                    } else {
-                        cmd.stdin(Stdio::inherit());
-                    }
-
-                    if i < len - 1 {
-                        cmd.stdout(Stdio::piped());
-                    } else {
-                        cmd.stdout(Stdio::inherit());
-                    }
-
-                    apply_redirections(shl_cmd, &mut cmd)?;
-
-                    let child = cmd.spawn()?;
-                    children.push(child);
-                }
-
-                for mut child in children {
-                    child.wait()?;
-                }
-                Ok(())
-            }
+            _ => return self.run_pipe(pipe),
         }
+    }
+
+    fn run_pipe(&mut self, pipe: &Pipeline) -> ShlResult<()> {
+        let len = pipe.commands.len();
+
+        let mut children: Vec<Child> = Vec::new();
+        for (i, shl_cmd) in pipe.commands.iter().enumerate() {
+            let mut cmd = Command::new(shl_cmd.name.clone());
+            cmd.args(&shl_cmd.args);
+
+            if i > 0 {
+                if let Some(child) = children.last_mut() {
+                    let prev_stdout = child
+                        .stdout
+                        .take()
+                        .ok_or_else(|| ShellErrors::Pipe(format!("can not get pre stdout")))?;
+
+                    cmd.stdin(prev_stdout);
+                }
+            } else {
+                cmd.stdin(Stdio::inherit());
+            }
+
+            if i < len - 1 {
+                cmd.stdout(Stdio::piped());
+            } else {
+                cmd.stdout(Stdio::inherit());
+            }
+
+            apply_redirections(shl_cmd, &mut cmd)?;
+
+            let child = cmd.spawn()?;
+            children.push(child);
+        }
+
+        for mut child in children {
+            child.wait()?;
+        }
+        Ok(())
     }
 
     fn run_cmd(&mut self, shl_cmd: &ShlCommand) -> ShlResult<()> {
